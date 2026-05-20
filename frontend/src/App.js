@@ -5,6 +5,8 @@ import AnalysisDashboard from './components/AnalysisDashboard';
 import LoadingSpinner from './components/LoadingSpinner';
 import { analyzeProduct, healthCheck } from './services/api';
 
+const API_BASE_URL = process.env.REACT_APP_API_BASE_URL || 'http://localhost:8000';
+
 function App() {
   const [analysisData, setAnalysisData] = useState(null);
   const [loading, setLoading] = useState(false);
@@ -50,7 +52,7 @@ function App() {
         {!backendConnected && !analysisData && (
           <div className="connection-warning">
             <strong>⚠️ Backend Connection Warning:</strong> Could not connect to the API server at
-            http://localhost:8000. Make sure the backend is running.
+            {` ${API_BASE_URL}`}. Make sure the backend is running.
           </div>
         )}
 

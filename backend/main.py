@@ -65,6 +65,8 @@ async def analyze_product(body: AnalyzeRequest):
         reviews: list[dict] = await asyncio.to_thread(scrape, url, body.max_reviews)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
+    except RuntimeError as e:
+        raise HTTPException(status_code=503, detail=str(e))
     except Exception as e:
         raise HTTPException(status_code=502, detail=f"Scraping failed: {e}")
 

@@ -1,6 +1,6 @@
 import axios from 'axios';
 
-const API_BASE_URL = 'https://revora-2jl5.onrender.com';
+const API_BASE_URL = process.env.REACT_APP_API_BASE_URL || 'http://localhost:8000';
 
 const api = axios.create({
   baseURL: API_BASE_URL,
@@ -45,6 +45,7 @@ export const healthCheck = async () => {
     await api.get('/health');
     return true;
   } catch {
+    console.warn(`Backend health check failed at ${API_BASE_URL}`);
     return false;
   }
 };
