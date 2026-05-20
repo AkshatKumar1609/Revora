@@ -18,7 +18,8 @@ app = FastAPI(
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=["*"],  # for production, replace "*" with your frontend URL
+    allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
@@ -79,3 +80,13 @@ async def analyze_product(body: AnalyzeRequest):
 
     report.pop("per_review", None)
     return report
+
+
+# Serve React build folder
+frontend_dir = os.path.join(os.path.dirname(__file__), "../frontend/build")
+if os.path.exists(frontend_dir):
+    app.mount("/", StaticFiles(directory=frontend_dir, html=True), name="frontend")
+
+    @app.get("/{full_path:path}")
+    async def serve_react_app(full_path: str):
+        return FileResponse(os.path.join(frontend_dir, "index.html"))
