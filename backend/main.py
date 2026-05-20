@@ -2,7 +2,6 @@ import asyncio
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
-from fastapi.staticfiles import StaticFiles
 
 import sys, os
 sys.path.insert(0, os.path.dirname(__file__))
@@ -19,8 +18,7 @@ app = FastAPI(
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # for production, replace "*" with your frontend URL
-    allow_credentials=True,
+    allow_origins=["*"],
     allow_methods=["*"],
     allow_headers=["*"],
 )
@@ -65,8 +63,6 @@ async def analyze_product(body: AnalyzeRequest):
         reviews: list[dict] = await asyncio.to_thread(scrape, url, body.max_reviews)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
-    except RuntimeError as e:
-        raise HTTPException(status_code=503, detail=str(e))
     except Exception as e:
         raise HTTPException(status_code=502, detail=f"Scraping failed: {e}")
 
@@ -83,13 +79,3 @@ async def analyze_product(body: AnalyzeRequest):
 
     report.pop("per_review", None)
     return report
-
-
-# Serve React build folder
-frontend_dir = os.path.join(os.path.dirname(__file__), "../frontend/build")
-if os.path.exists(frontend_dir):
-    app.mount("/", StaticFiles(directory=frontend_dir, html=True), name="frontend")
-
-    @app.get("/{full_path:path}")
-    async def serve_react_app(full_path: str):
-        return FileResponse(os.path.join(frontend_dir, "index.html"))

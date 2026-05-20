@@ -1,25 +1,32 @@
-import re, time, random
-from urllib.parse import urlparse, urlencode, parse_qs, urlunparse
-from playwright.sync_api import sync_playwright
+"""
+Flipkart Review Scraper
+-----------------------
+Uses Playwright (headless Chromium) since Flipkart renders reviews via JavaScript.
 
-MAX_PAGES = 999
+For cloud deployments where the IP is blocked by Flipkart's anti-bot:
+  Set SCRAPERAPI_KEY env var → routes through ScraperAPI's residential proxies.
+  Free key (5000 req/month): https://scraperapi.com
+"""
+
+import os, re, time, random
+from urllib.parse import urlparse, urlencode, parse_qs, urlunparse
 
 RATING_SELECTOR = ".r-rehuqn+ .css-g5y9jx .css-146c3p1:nth-child(1)"
 TITLE_SELECTOR  = ".r-rehuqn~ .css-146c3p1"
 TEXT_SELECTOR   = ".css-1jxf684"
+MAX_PAGES       = 999
 
-# Phrases that appear when Flipkart blocks/challenges the request
+# Signals used only by the ScraperAPI path (not Playwright)
 _BLOCK_SIGNALS = [
-    "access denied", "robot", "captcha", "verify you are human",
-    "unusual traffic", "security check", "please wait",
+    "access denied",
+    "verify you are human",
+    "unusual traffic from your computer",
 ]
 
-# Realistic desktop user-agents to rotate
 _USER_AGENTS = [
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36 Edg/123.0.0.0",
     "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
-    "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
 ]
 
 
@@ -51,24 +58,42 @@ def _get_page_url(base: str, page: int) -> str:
     return urlunparse(parsed._replace(query=urlencode(q)))
 
 
-def _is_blocked(page) -> bool:
-    """Return True if Flipkart is showing a block/challenge page."""
-    try:
-        content = page.content().lower()
-        return any(signal in content for signal in _BLOCK_SIGNALS)
-    except Exception:
-        return False
+def _scrape_via_scraperapi(reviews_url: str, max_reviews: int, api_key: str) -> list[dict]:
+    import httpx
+    from bs4 import BeautifulSoup
+
+    all_reviews: list[dict] = []
+    with httpx.Client(timeout=60) as client:
+        for n in range(1, MAX_PAGES + 1):
+            resp = client.get(
+                "https://api.scraperapi.com/",
+                params={"api_key": api_key, "url": _get_page_url(reviews_url, n), "render": "true", "country_code": "in"},
+            )
+            if resp.status_code != 200:
+                break
+            html = resp.text
+            if any(sig in html.lower() for sig in _BLOCK_SIGNALS):
+                raise RuntimeError("ScraperAPI returned a blocked page. Check your API key.")
+
+            soup = BeautifulSoup(html, "html.parser")
+            ratings = [_clean(el.get_text()) for el in soup.select(RATING_SELECTOR)]
+            titles  = [_clean(el.get_text()) for el in soup.select(TITLE_SELECTOR)]
+            texts   = [_clean(el.get_text()) for el in soup.select(TEXT_SELECTOR)]
+
+            batch = [{"rating": r, "title": t, "review": x} for r, t, x in zip(ratings, titles, texts) if x.strip()]
+            if not batch:
+                break
+            remaining = max_reviews - len(all_reviews)
+            all_reviews.extend(batch[:remaining])
+            if len(all_reviews) >= max_reviews:
+                break
+            time.sleep(0.5)
+    return all_reviews
 
 
-def scrape(url: str, max_reviews: int = 100) -> list[dict]:
-    """
-    Scrape review pages for a Flipkart product URL.
-    Stops once max_reviews have been collected.
-    Returns a list of dicts: [{rating, title, review}, ...]
-    Raises ValueError for invalid URLs.
-    Raises RuntimeError if the page is blocked by anti-bot.
-    """
-    reviews_url = _to_reviews_url(url)
+def _scrape_via_playwright(reviews_url: str, max_reviews: int) -> list[dict]:
+    from playwright.sync_api import sync_playwright
+
     all_reviews: list[dict] = []
 
     with sync_playwright() as pw:
@@ -78,13 +103,10 @@ def scrape(url: str, max_reviews: int = 100) -> list[dict]:
                 "--no-sandbox",
                 "--disable-dev-shm-usage",
                 "--disable-blink-features=AutomationControlled",
-                "--disable-infobars",
-                "--disable-extensions",
                 "--disable-gpu",
                 "--window-size=1920,1080",
             ],
         )
-
         context = browser.new_context(
             user_agent=random.choice(_USER_AGENTS),
             viewport={"width": 1920, "height": 1080},
@@ -96,42 +118,30 @@ def scrape(url: str, max_reviews: int = 100) -> list[dict]:
                 "DNT": "1",
             },
         )
-
-        # Hide navigator.webdriver flag
         context.add_init_script("""
             Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
-            Object.defineProperty(navigator, 'plugins', { get: () => [1, 2, 3] });
+            Object.defineProperty(navigator, 'plugins',   { get: () => [1, 2, 3] });
             Object.defineProperty(navigator, 'languages', { get: () => ['en-IN', 'en'] });
         """)
-
         page = context.new_page()
 
         for n in range(1, MAX_PAGES + 1):
             page.goto(_get_page_url(reviews_url, n), wait_until="domcontentloaded", timeout=30_000)
 
-            # Detect block page before waiting for review selector
-            if _is_blocked(page):
-                raise RuntimeError(
-                    "Flipkart blocked the request (anti-bot). "
-                    "This is common on cloud/shared IPs. Try again later or use a residential proxy."
-                )
-
+            # Wait for reviews to render (JS-driven page)
             try:
                 page.wait_for_selector(TEXT_SELECTOR, timeout=15_000)
             except Exception:
+                # Selector timed out — either last page or product has no reviews
                 break
 
-            # Small random delay to mimic human reading speed
             time.sleep(random.uniform(1.0, 2.0))
 
             ratings = [_clean(el.inner_text()) for el in page.query_selector_all(RATING_SELECTOR)]
             titles  = [_clean(el.inner_text()) for el in page.query_selector_all(TITLE_SELECTOR)]
             texts   = [_clean(el.inner_text()) for el in page.query_selector_all(TEXT_SELECTOR)]
 
-            batch = [
-                {"rating": r, "title": t, "review": x}
-                for r, t, x in zip(ratings, titles, texts)
-            ]
+            batch = [{"rating": r, "title": t, "review": x} for r, t, x in zip(ratings, titles, texts) if x.strip()]
             if not batch:
                 break
 
@@ -145,3 +155,16 @@ def scrape(url: str, max_reviews: int = 100) -> list[dict]:
         browser.close()
 
     return all_reviews
+
+
+def scrape(url: str, max_reviews: int = 100) -> list[dict]:
+    """
+    Scrape reviews for a Flipkart product URL.
+    Uses ScraperAPI if SCRAPERAPI_KEY env var is set, otherwise Playwright directly.
+    """
+    reviews_url = _to_reviews_url(url)
+    api_key = os.environ.get("SCRAPERAPI_KEY", "").strip()
+
+    if api_key:
+        return _scrape_via_scraperapi(reviews_url, max_reviews, api_key)
+    return _scrape_via_playwright(reviews_url, max_reviews)
