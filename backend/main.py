@@ -2,6 +2,7 @@ import asyncio
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
+from fastapi.staticfiles import StaticFiles
 
 import sys, os
 sys.path.insert(0, os.path.dirname(__file__))

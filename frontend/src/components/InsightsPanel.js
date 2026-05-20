@@ -45,7 +45,9 @@ const InsightsPanel = ({ marketingInsights, productImprovements, frequentlyMenti
         <ul>
           {productImprovements && productImprovements.length > 0 ? (
             productImprovements.map((improvement, idx) => (
-              <li key={idx}>{improvement}</li>
+              <li key={idx}>
+                {typeof improvement === 'object' ? improvement.suggestion : improvement}
+              </li>
             ))
           ) : (
             <li className="empty">No improvements suggested</li>
