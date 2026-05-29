@@ -57,40 +57,6 @@ def _get_page_url(base: str, page: int) -> str:
     q["page"] = str(page)
     return urlunparse(parsed._replace(query=urlencode(q)))
 
-
-def _scrape_via_scraperapi(reviews_url: str, max_reviews: int, api_key: str) -> list[dict]:
-    import httpx
-    from bs4 import BeautifulSoup
-
-    all_reviews: list[dict] = []
-    with httpx.Client(timeout=60) as client:
-        for n in range(1, MAX_PAGES + 1):
-            resp = client.get(
-                "https://api.scraperapi.com/",
-                params={"api_key": api_key, "url": _get_page_url(reviews_url, n), "render": "true", "country_code": "in"},
-            )
-            if resp.status_code != 200:
-                break
-            html = resp.text
-            if any(sig in html.lower() for sig in _BLOCK_SIGNALS):
-                raise RuntimeError("ScraperAPI returned a blocked page. Check your API key.")
-
-            soup = BeautifulSoup(html, "html.parser")
-            ratings = [_clean(el.get_text()) for el in soup.select(RATING_SELECTOR)]
-            titles  = [_clean(el.get_text()) for el in soup.select(TITLE_SELECTOR)]
-            texts   = [_clean(el.get_text()) for el in soup.select(TEXT_SELECTOR)]
-
-            batch = [{"rating": r, "title": t, "review": x} for r, t, x in zip(ratings, titles, texts) if x.strip()]
-            if not batch:
-                break
-            remaining = max_reviews - len(all_reviews)
-            all_reviews.extend(batch[:remaining])
-            if len(all_reviews) >= max_reviews:
-                break
-            time.sleep(0.5)
-    return all_reviews
-
-
 def _scrape_via_playwright(reviews_url: str, max_reviews: int) -> list[dict]:
     from playwright.sync_api import sync_playwright
 
@@ -100,11 +66,13 @@ def _scrape_via_playwright(reviews_url: str, max_reviews: int) -> list[dict]:
         browser = pw.chromium.launch(
             headless=True,
             args=[
-                "--no-sandbox",
-                "--disable-dev-shm-usage",
-                "--disable-blink-features=AutomationControlled",
-                "--disable-gpu",
-                "--window-size=1920,1080",
+                    '--no-sandbox',
+                    '--disable-setuid-sandbox',
+                    '--disable-dev-shm-usage',
+                    '--disable-accelerated-2d-canvas',
+                    '--no-zygote',
+                    "--disable-blink-features=AutomationControlled",
+                    "--disable-infobars"
             ],
         )
         context = browser.new_context(
@@ -163,8 +131,7 @@ def scrape(url: str, max_reviews: int = 100) -> list[dict]:
     Uses ScraperAPI if SCRAPERAPI_KEY env var is set, otherwise Playwright directly.
     """
     reviews_url = _to_reviews_url(url)
-    api_key = os.environ.get("SCRAPERAPI_KEY", "").strip()
-
-    if api_key:
-        return _scrape_via_scraperapi(reviews_url, max_reviews, api_key)
     return _scrape_via_playwright(reviews_url, max_reviews)
+
+# if __name__ == "__main__":
+#     print(scrape("https://www.flipkart.com/rls-t900-ultra-digital-watch-boys-girls/p/itma93dc67b1700d?pid=WATHFKEGVZSGBXR3&lid=LSTWATHFKEGVZSGBXR3ELFOTX&marketplace=FLIPKART&store=r18&srno=b_1_1&otracker=browse&fm=organic&iid=11ae5bbe-1d12-42d4-98e8-4580b53de199.WATHFKEGVZSGBXR3.SEARCH&ppt=browse&ppn=browse&ssid=mn46ywez280000001779211072312&ov_redirect=true",1))
